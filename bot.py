@@ -11,7 +11,6 @@ from aiogram.filters import Command
 from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from aiogram.fsm.storage.memory import MemoryStorage
 import logger
-import sys
 import json
 import asyncgpt
 import db
@@ -25,16 +24,10 @@ def escape_characters(text: str, characters: str):
     return text
 
 
-def resource_path(relative_path):
-    """ Get absolute path to resource, works for dev and for PyInstaller """
-    base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base_path, relative_path)
-
-
 # region Initialization
 
 
-with open(resource_path("creds.json"), "r") as f:
+with open("creds.json", "r") as f:
     creds = json.load(f)
 
 logger = logger.Logger()

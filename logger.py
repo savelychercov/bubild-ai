@@ -8,12 +8,6 @@ import re
 loaded = False
 
 
-def resource_path(relative_path):
-    """ Get absolute path to resource, works for dev and for PyInstaller """
-    base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base_path, relative_path)
-
-
 def slice_text(text: str, length: int = 1990) -> list[str]:
     if not text:
         return [""]
@@ -54,7 +48,7 @@ def singleton(cls):
 class Logger:
     def __init__(self, creds_path="creds.json"):
 
-        with open(resource_path(creds_path), "r") as f:
+        with open(creds_path, "r") as f:
             creds = json.load(f)
 
         print("Setting telegram logger token")
