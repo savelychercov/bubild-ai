@@ -1,10 +1,8 @@
-import os
-import aiogram
 from aiogram.exceptions import TelegramBadRequest
 from aiogram import Bot, Dispatcher
 from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup,
-    InlineKeyboardButton, Message, ErrorEvent, Poll, PhotoSize)
+    InlineKeyboardButton, Message, ErrorEvent, Poll, PhotoSize, CallbackQuery, ReplyKeyboardRemove)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Command
@@ -15,13 +13,20 @@ import json
 import asyncgpt
 import db
 
+
 # region Utils
+
+characters_to_escape = "!.-("
 
 
 def escape_characters(text: str, characters: str):
+    text = str(text)
     for char in characters:
         text = text.replace(char, f"\\{char}")
     return text
+
+
+# endregion
 
 
 # region Initialization
@@ -135,6 +140,9 @@ async def drop_settings(message: Message):
 # endregion
 
 
+# region Main Functionality
+
+
 @dp.message()
 async def handle_message(message: Message):
     user_id = message.from_user.id
@@ -154,7 +162,7 @@ async def handle_message(message: Message):
             user_text = message.caption
 
     context = await db.get_full_context(user_id)
-    print("Text: ", user_text, "File: ", file_url)
+    # print("Text: ", user_text, "File: ", file_url)
     context += [gpt.pack_message(user_text, [file_url], "user")]
 
     try:
@@ -164,14 +172,32 @@ async def handle_message(message: Message):
         response = "Произошла неизвестная ошибка, попробуйте еще раз позже."
 
     try:
-        await message.answer(escape_characters(response, "!.-"), parse_mode="MarkdownV2")
+        if isinstance(response, str):
+            await message.answer(escape_characters(response, characters_to_escape), parse_mode="MarkdownV2", reply_markup=ReplyKeyboardRemove())
+
+            await db.add_to_history(user_id, "user", text=user_text, image_url=file_url)
+            await db.add_to_history(user_id, "assistant", text=response)
+        if isinstance(response, asyncgpt.ClarifyQuestion):
+            buttons = [[KeyboardButton(text=option, callback_data=option)] for option in response.options]
+            keyboard = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
+            await message.answer(escape_characters(response.question, characters_to_escape), reply_markup=keyboard, parse_mode="MarkdownV2")
+
+            await db.add_to_history(user_id, "user", text=user_text, image_url=file_url)
+            await db.add_to_history(user_id, "assistant", text=response.question)
+        if isinstance(response, asyncgpt.Memory):
+            await db.set_memory(user_id, response.memory)
+            await message.answer(f"Информация о пользователе обновлена:\n\n```text\n{escape_characters(response.memory, characters_to_escape)}\n```", parse_mode="MarkdownV2", reply_markup=ReplyKeyboardRemove())
+
+            await db.add_to_history(user_id, "user", text=user_text, image_url=file_url)
+            await db.add_to_history(user_id, "assistant", text="Информация о пользователе обновлена")
+
     except TelegramBadRequest as e:
         logger.log(f"Error while sending message to Telegram: {e.message}")
         await message.answer(response)
 
-    await db.add_to_history(user_id, "user", text=user_text, image_url=file_url)
-    await db.add_to_history(user_id, "assistant", text=response)
-
 
 async def main():
     await dp.start_polling(bot)
+
+
+# endregion

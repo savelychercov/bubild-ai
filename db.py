@@ -62,6 +62,7 @@ async def add_to_history(user_id: int, role: str, text: Optional[str] = None, im
     else:
         history = {
             "settings": None,
+            "memory": None,
             "messages": []
         }
 
@@ -72,6 +73,28 @@ async def add_to_history(user_id: int, role: str, text: Optional[str] = None, im
 
     async with aiofiles.open(file_path, mode='w', encoding='utf-8') as f:
         await f.write(json.dumps(history, ensure_ascii=False, indent=4))
+
+
+async def set_memory(user_id: int, memory: str | None):
+    file_path = get_path(user_id)
+    if os.path.exists(file_path):
+        async with aiofiles.open(file_path, mode='r', encoding='utf-8') as f:
+            history_data = json.loads(await f.read())
+        history_data["memory"] = memory
+        async with aiofiles.open(file_path, mode='w', encoding='utf-8') as f:
+            await f.write(json.dumps(history_data, ensure_ascii=False, indent=4))
+
+
+async def get_memory(user_id: int) -> str:
+    file_path = get_path(user_id)
+
+    if not os.path.exists(file_path):
+        return None
+
+    async with aiofiles.open(file_path, mode='r', encoding='utf-8') as f:
+        history_data = json.loads(await f.read())
+
+    return history_data["memory"]
 
 
 async def get_settings(user_id: int) -> str:
@@ -100,15 +123,18 @@ async def get_history(user_id: int) -> List[Message]:
 
 async def get_full_context(user_id: int) -> List[dict]:
     settings_str = await get_settings(user_id)
+    memory_str = await get_memory(user_id)
     history = await get_history(user_id)
     context = []
     if settings_str:
         context.append(OpenAIChatBot.pack_message(default_settings + settings_str, role="system"))
     else:
         context.append(OpenAIChatBot.pack_message(default_settings, role="system"))
+    if memory_str:
+        context.append(OpenAIChatBot.pack_message(f"Информация о пользователе: {memory_str}", role="system"))
     for message in history:
         context.append(OpenAIChatBot.pack_message(message.text, [message.image_url], message.role))
-    print(f"Got {history_len([msg.to_dict() for msg in history])} tokens from history")
+    # print(f"Got {history_len([msg.to_dict() for msg in history])} tokens from history")
     return context
 
 

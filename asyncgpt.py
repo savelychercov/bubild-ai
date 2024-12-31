@@ -1,6 +1,6 @@
 import openai
 import asyncio
-from typing import List, Dict, Optional, Callable, Any
+from typing import Dict, Optional, Callable, Any
 import json
 
 function_pool = {}
@@ -21,36 +21,55 @@ def register_function(
                 continue
             param_info[param_name] = {
                 "type": param_type.__name__ if hasattr(param_type, "__name__") else str(param_type),
-                "description": param_descriptions.get(param_name,
-                                                      "Нет описания") if param_descriptions else "Нет описания"
+                "description": param_descriptions.get(param_name, "Нет описания") if param_descriptions else "Нет описания"
             }
+            if param_type.__name__ == "list":
+                param_info[param_name]["type"] = "array"
+                param_info[param_name]["items"] = {
+                    "type": param_type.__args__[0].__name__ if hasattr(param_type.__args__[0], "__name__") else str(param_type.__args__[0])
+                }
+                if param_type.__args__[0].__name__ == "str":
+                    param_info[param_name]["items"]["type"] = "string"
+            if param_type.__name__ == "str":
+                param_info[param_name]["type"] = "string"
 
         function_pool[func.__name__] = {
             "description": description or "Нет описания",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    param: {
-                        "type": info["type"],
-                        "description": info["description"]
-                    }
+                    param: (
+                        {
+                            "type": info["type"],
+                            "description": info["description"]
+                        }
+                        if info["type"] != "array" else
+                        {
+                            "type": "array",
+                            "description": info["description"],
+                            "items": {
+                                "type": info["items"]["type"],
+                            }
+                        }
+                    )
                     for param, info in param_info.items()
                 },
                 "required": list(param_info.keys())
             },
-            "followup": followup
+            "followup": followup,
+            "function": func
         }
-
+        print(function_pool[func.__name__])
         return func
 
     return decorator
 
 
-def call_function_by_name(function_name: str, arguments: dict) -> Any:
+async def call_function_by_name(function_name: str, arguments: dict) -> Any:
     if function_name in function_pool:
         func = function_pool[function_name]["function"]
         followup = function_pool[function_name]["followup"]
-        return followup, func(**arguments)
+        return followup, await func(**arguments)
     else:
         return {"error": "Function not found"}
 
@@ -61,11 +80,11 @@ class OpenAIChatBot:
         self.model = model
         self.temperature = temperature
 
-    async def gen_answer(self, full_context: List[Dict] | str) -> tuple:
+    async def gen_answer(self, full_context: list[Dict] | str) -> tuple:
         if isinstance(full_context, str):
             full_context = [{"role": "user", "content": full_context}]
 
-        print("full_context:\n", json.dumps(full_context, ensure_ascii=False, indent=4))
+        # print("full_context:\n", json.dumps(full_context, ensure_ascii=False, indent=4))
 
         functions = [{
             "name": func_name,
@@ -73,7 +92,7 @@ class OpenAIChatBot:
             "parameters": func_data["parameters"]
         } for func_name, func_data in function_pool.items()]
 
-        completion: openai.ChatCompletion = await asyncio.to_thread(
+        completion = await asyncio.to_thread(
             self.client.chat.completions.create,
             model=self.model,
             messages=full_context,
@@ -81,10 +100,12 @@ class OpenAIChatBot:
             function_call="auto" if functions else openai.NOT_GIVEN
         )
 
+        print(f"Completion created: {completion.usage.prompt_tokens}t input, {completion.usage.completion_tokens}t output, {completion.usage.total_tokens}t sum")
+
         function_call = self.get_function_call(completion)
         if function_call:
             arguments = self.get_args_from_response(completion)
-            needs_followup, function_result = call_function_by_name(function_call, arguments)
+            needs_followup, function_result = await call_function_by_name(function_call, arguments)
 
             if not needs_followup: return function_result
 
@@ -101,7 +122,7 @@ class OpenAIChatBot:
         # Если функция не вызвана, возвращаем обычный ответ
         return completion.choices[0].message.content
 
-    '''@staticmethod
+    r'''@staticmethod
     def refine_name(name: str) -> str:
         if not re.match(regex_for_names, name):
             transliterated_name = transliterate.translit(name, "ru", reversed=True)
@@ -110,7 +131,7 @@ class OpenAIChatBot:
         return name or "NoName"'''
 
     @staticmethod
-    def pack_message(text: str, image_urls: Optional[List[str]] = None, role: str = "user") -> Dict:
+    def pack_message(text: str, image_urls: Optional[list[str]] = None, role: str = "user") -> Dict:
         message = {"role": role, "content": []}
         if text:
             message["content"].append({"type": "text", "text": text})
@@ -127,3 +148,45 @@ class OpenAIChatBot:
     @staticmethod
     def get_function_call(resp: openai.ChatCompletion) -> Optional[str]:
         return resp.choices[0].message.function_call.name if resp.choices[0].message.function_call else None
+
+
+class ClarifyQuestion:
+    def __init__(self, question: str, options: list[str]):
+        self.question = question
+        self.options = options
+
+
+@register_function(
+    description="Задать уточняющий вопрос",
+    param_descriptions={
+        "question": "Вопрос",
+        "options": "Варианты ответов"
+    },
+    followup=False
+)
+async def clarify(question: str, options: list[str]) -> str:
+    return ClarifyQuestion(question, options)
+
+
+class Memory:
+    def __init__(self, memory: str):
+        self.memory = memory
+
+
+@register_function(
+    description="Задать информацию о пользователе (память)",
+    param_descriptions={
+        "memory": "Информация о пользователе"
+    },
+    followup=False
+)
+async def set_memory(memory: str) -> str:
+    return Memory(memory)
+
+
+@register_function(
+    description="Очистить информацию о пользователе",
+    followup=False
+)
+async def clear_memory() -> str:
+    return Memory(None)
