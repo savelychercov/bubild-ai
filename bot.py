@@ -16,7 +16,7 @@ import db
 
 # region Utils
 
-characters_to_escape = "!.-("
+characters_to_escape = "!.-(#"
 
 
 def escape_characters(text: str, characters: str):
